@@ -62,11 +62,11 @@ TIMEOUT_SECS=180
 
 ## 🏷️ hosts.txt Format
 
-*The first line sets the SINCE variable, you can update accordingly.
-*There are instructions in the file, but here's a quick overview:
-*One of these lines should always be commented out depending on what you are trying to do:
-*If you want to set a start day/time uncomment the first option, and enter the start time
-*Alternatively, if you want to start from the beginning of time, uncomment the second line
+The first line sets the SINCE variable, you can update accordingly.
+There are instructions in the file, but here's a quick overview.
+One of these lines should always be commented out depending on what you are trying to do, ie:
+If you want to set a start day/time uncomment the first option, and enter the start time.
+Alternatively, if you want to start from the beginning of time, uncomment the second line.
 
 ```
 #SINCE=2025-11-05T20:00

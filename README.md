@@ -1,6 +1,6 @@
 # Poursteady Error Log Retrieval System
 
-A clean, GitHub-friendly overview of how to fetch, parse, and aggregate error logs from multiple Poursteady machines over SSH using a local script streamed to the remote host.
+A clean overview of how to fetch, parse, and aggregate error logs from multiple Poursteady machines over SSH using a local script streamed to the remote host.
 
 ---
 

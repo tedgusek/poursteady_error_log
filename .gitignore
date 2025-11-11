@@ -2,3 +2,4 @@ hosts.txt
 results/
 *.log
 *.json
+.env

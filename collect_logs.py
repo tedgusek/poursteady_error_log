@@ -1,239 +1,281 @@
 #!/usr/bin/env python3
 """
-collect_logs.py
+collect_logs.py — Run a *local* parser script on remote machines over SSH and print results per machine.
 
-Usage examples:
-# Run now, using private key:
-python3 collect_logs.py --targets hosts.txt --username ubuntu --key ~/.ssh/id_rsa \
-    --remote-cmd "sudo /usr/local/bin/collect_logs.sh /tmp/collected.log" \
-    --download-remote-file /tmp/collected.log --outdir ./results
+Key features
+- Reads hosts from hosts.txt (CSV: name,ip[,username][,port])
+- Loads credentials/defaults from .env (SSH_USERNAME, SSH_PASSWORD, SSH_KEY, SSH_PORT, CONCURRENCY, TIMEOUT_SECS)
+- Streams a local bash/awk parser to the remote via stdin (no files left on remote)
+- Parameterizes the time cutoff ("since")
+- Parallel execution; prints per-host results; optional JSON save
+- Secure error handling (no credential echoing)
 
-# Run at designated time (ISO format):
-python3 collect_logs.py --targets hosts.csv --username admin --key ~/.ssh/id_rsa \
-    --remote-cmd "journalctl -u myservice --no-pager > /tmp/myservice.log" \
-    --download-remote-file /tmp/myservice.log --at 2025-11-20T03:00
+Examples
+# Basic run using .env for username/key and a cutoff of Nov 5, 2025 20:00 local time
+python3 collect_logs.py --targets hosts.txt --since 2025-11-05T20:00
 
-Targets file format (plain text): one IP per line
-Or CSV: ip,username,port (port optional) - script handles simple formats
+# Use an external parser file (bash script); otherwise built-in default is used
+python3 collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --parser-file ./collect_errors.sh
+
+# Schedule for later (local time)
+python3 collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --at 2025-11-12T03:00
+
+# Save aggregate JSON too
+python3 collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --save-json ./results/aggregate.json
+
+hosts.txt format (CSV):
+PS1428, 192.168.1.148
+PS1429, 192.168.1.149, ubuntu
+PS1430, 192.168.1.150, ubuntu, 2222
+
+.env example (same folder):
+SSH_USERNAME=ubuntu
+SSH_PASSWORD=           # optional if key is used
+SSH_KEY=C:/Users/PS Manufacturing/.ssh/id_ed25519
+SSH_PORT=22
+CONCURRENCY=8
+TIMEOUT_SECS=180
+
 """
-
 import argparse
 import concurrent.futures
-import datetime
+import datetime as dt
 import json
 import os
 import sys
-import time
 from typing import List, Dict, Optional
 
 import paramiko
+from dotenv import load_dotenv
 
 # -------------------------
-# Utility functions
+# Defaults and parser script
 # -------------------------
-def parse_targets_file(path: str) -> List[Dict]:
-    """
-    Accepts:
-      - plain file with one IP per line
-      - csv with ip,username,port columns (comma separated)
-    Returns list of dicts: {ip, username (optional), port (optional)}
-    """
-    targets = []
+BUILTIN_PARSER = r"""#!/usr/bin/env bash
+# Reads logs, filters by a numeric cutoff YYYYMMDDHHMM passed as $1
+SINCE="$1"
+if [[ -z "$SINCE" ]]; then
+  echo "Missing SINCE argument (YYYYMMDDHHMM)" >&2
+  exit 2
+fi
+# Concatenate current and gz-rotated logs, ignoring missing .gz files
+{ zcat /data/poursteady/log/*-console.txt-*.gz 2>/dev/null ; cat /data/poursteady/log/*-console.txt 2>/dev/null; } \
+| awk -v since="$SINCE" 'BEGIN{IGNORECASE=1}
+{
+  # Expect first token to be ISO-like: 2025-11-05T20:13:00-05:00
+  split($1, dt, /[T:-]/)
+  if (length(dt[1])==0 || length(dt[2])==0 || length(dt[3])==0) next
+  datenum = dt[1] dt[2] dt[3]
+  timenum = dt[4] * 100 + dt[5]
+  datetime = datenum * 10000 + timenum
+  if (datetime >= since) {
+    line = $0
+    if (/EMCY/) {
+      match(line, /(0000|1000|2310|2340|3210|3220|4280|4310|5441|5442|5443|6100|7500|8110|8130|8331|8580|8611|9000|FF01|FF02|FF03|FF04|FF05)/)
+      if (RSTART > 0) {
+        code = substr(line, RSTART, RLENGTH)
+        timestamp = $1
+        emcy_count[code]++
+        emcy_last_time[code] = timestamp
+      }
+    }
+    if (/failure/) {
+      failure_count++
+      failure_last_timestamp = $1
+    }
+  }
+}
+END {
+  for (code in emcy_count) {
+    print emcy_count[code], code, emcy_last_time[code]
+  }
+  print (failure_count ? failure_count : 0) " SAOBO Errors " failure_last_timestamp
+}' | sort -rn
+"""
+
+# -------------------------
+# Helpers
+# -------------------------
+
+def read_hosts(path: str) -> List[Dict]:
+    hosts: List[Dict] = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith("#"):  # skip comments/blank
                 continue
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) == 1:
-                targets.append({"ip": parts[0]})
-            elif len(parts) == 2:
-                targets.append({"ip": parts[0], "username": parts[1]})
-            else:
-                # ip, username, port
-                targets.append({"ip": parts[0], "username": parts[1], "port": int(parts[2])})
-    return targets
+            if len(parts) < 2:
+                raise ValueError(f"Each line must be at least name,ip — bad line: {line}")
+            entry = {"name": parts[0], "ip": parts[1]}
+            if len(parts) >= 3 and parts[2]:
+                entry["username"] = parts[2]
+            if len(parts) >= 4 and parts[3]:
+                entry["port"] = int(parts[3])
+            hosts.append(entry)
+    return hosts
 
 
-def ssh_run_command(ip: str,
-                    username: str,
-                    port: int,
-                    key_filename: Optional[str],
-                    password: Optional[str],
-                    remote_cmd: str,
-                    timeout: int,
-                    download_remote_file: Optional[str],
-                    local_outdir: str,
-                    max_retries: int = 1) -> Dict:
-    """
-    Connect to ip over SSH, run remote_cmd, capture stdout/stderr/exit_code.
-    Optionally download a remote file via SFTP (download_remote_file -> saved with ip prefix).
-    Returns dict with results.
-    """
-    attempt = 0
-    last_err = None
-    while attempt < max_retries:
-        attempt += 1
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        try:
-            connect_kwargs = dict(hostname=ip, port=port, username=username, timeout=10)
-            if key_filename:
-                connect_kwargs["key_filename"] = key_filename
-            if password:
-                connect_kwargs["password"] = password
+def iso_to_cutoff_yyyymmddhhmm(iso_str: str) -> str:
+    # Accept local time ISO like 2025-11-05T20:00 or with seconds
+    try:
+        t = dt.datetime.fromisoformat(iso_str)
+    except Exception as e:
+        raise ValueError("--since must be ISO like 2025-11-05T20:00") from e
+    return f"{t.year:04d}{t.month:02d}{t.day:02d}{t.hour:02d}{t.minute:02d}"
 
-            client.connect(**connect_kwargs)
 
-            # run command
-            stdin, stdout, stderr = client.exec_command(remote_cmd, timeout=timeout)
-            exit_status = stdout.channel.recv_exit_status()  # wait for completion
+def _connect(ip: str, username: str, port: int, keyfile: Optional[str], password: Optional[str]) -> paramiko.SSHClient:
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(hostname=ip, port=port, username=username,
+                   key_filename=keyfile if keyfile else None,
+                   password=password if password else None,
+                   timeout=15)
+    return client
 
-            out = stdout.read().decode(errors="ignore")
-            err = stderr.read().decode(errors="ignore")
 
-            result = {
-                "ip": ip,
-                "username": username,
-                "port": port,
-                "exit_status": exit_status,
-                "stdout": out,
-                "stderr": err,
-                "attempt": attempt,
-                "error": None,
-            }
+def run_parser_on_host(host: Dict, parser_text: str, since_cutoff: str, timeout_secs: int,
+                       defaults: Dict) -> Dict:
+    name = host.get("name")
+    ip = host.get("ip")
+    username = host.get("username") or defaults.get("username")
+    port = int(host.get("port") or defaults.get("port", 22))
 
-            # Save stdout/stderr locally
-            safe_ip = ip.replace(":", "_")
-            os.makedirs(local_outdir, exist_ok=True)
-            with open(os.path.join(local_outdir, f"{safe_ip}_stdout.txt"), "w", encoding="utf-8") as fo:
-                fo.write(out)
-            with open(os.path.join(local_outdir, f"{safe_ip}_stderr.txt"), "w", encoding="utf-8") as fe:
-                fe.write(err)
-
-            # Optionally download file
-            if download_remote_file:
-                try:
-                    sftp = client.open_sftp()
-                    remote = download_remote_file
-                    basename = os.path.basename(remote)
-                    local_path = os.path.join(local_outdir, f"{safe_ip}_{basename}")
-                    sftp.get(remote, local_path)
-                    sftp.close()
-                    result["downloaded_file"] = local_path
-                except Exception as e:
-                    # don't fail entire job if download failed
-                    result["download_error"] = str(e)
-
-            client.close()
-            return result
-
-        except Exception as e:
-            last_err = e
-            # keep trying until max_retries
-            time.sleep(1)
-            try:
-                client.close()
-            except:
-                pass
-
-    # If we got here, failed all attempts
-    return {
+    result = {
+        "name": name,
         "ip": ip,
         "username": username,
         "port": port,
+        "ok": False,
+        "output": "",
+        "error": None,
         "exit_status": None,
-        "stdout": None,
-        "stderr": None,
-        "attempt": attempt,
-        "error": str(last_err),
     }
 
+    if not username:
+        result["error"] = "No username (set in hosts.txt or SSH_USERNAME in .env)"
+        return result
+
+    try:
+        client = _connect(ip, username, port, defaults.get("key"), defaults.get("password"))
+        try:
+            # If sudo requested, wrap bash with sudo -n
+            bash_cmd = "sudo -n bash -s" if defaults.get("sudo") else "bash -s"
+            # Start remote bash; stream parser via stdin; pass cutoff as arg $1
+            stdin, stdout, stderr = client.exec_command(f"{bash_cmd} -- {since_cutoff}", timeout=timeout_secs)
+            stdin.write(parser_text)
+            stdin.channel.shutdown_write()
+
+            exit_status = stdout.channel.recv_exit_status()
+            out = stdout.read().decode(errors="ignore")
+            err = stderr.read().decode(errors="ignore")
+
+            result.update({
+                "ok": exit_status == 0,
+                "output": out.strip(),
+                "error": err.strip() if exit_status != 0 else None,
+                "exit_status": exit_status,
+            })
+        finally:
+            client.close()
+    except paramiko.ssh_exception.AuthenticationException:
+        result["error"] = "Authentication failed (check key/password and username)."
+    except paramiko.ssh_exception.SSHException as e:
+        result["error"] = f"SSH error: {str(e)}"
+    except Exception as e:
+        result["error"] = f"Connection/run error: {e.__class__.__name__}: {str(e)}"
+
+    return result
+
+
 # -------------------------
-# CLI / Orchestration
+# Main
 # -------------------------
+
 def main():
-    p = argparse.ArgumentParser(description="Run a remote log-collection command across multiple machines via SSH.")
-    p.add_argument("--targets", required=True, help="Path to targets file (one IP per line, or csv ip,username,port)")
-    p.add_argument("--username", help="Default username if not present in targets file")
-    p.add_argument("--key", help="Private key file path (use with key auth).")
-    p.add_argument("--password", help="Password for SSH (not recommended).")
-    p.add_argument("--port", type=int, default=22, help="Default SSH port")
-    p.add_argument("--remote-cmd", required=True, help="Remote command to run on each host (e.g. '/usr/local/bin/collect_logs.sh /tmp/out.log')")
-    p.add_argument("--download-remote-file", help="Remote file path to download after command runs (optional)")
-    p.add_argument("--outdir", default="./results", help="Local folder to write results")
-    p.add_argument("--concurrency", type=int, default=16, help="How many SSH sessions in parallel")
-    p.add_argument("--timeout", type=int, default=120, help="Per-command timeout (seconds)")
-    p.add_argument("--retries", type=int, default=2, help="Retries per host")
-    p.add_argument("--at", help="Optional scheduled time to run (ISO format YYYY-MM-DDTHH:MM[:SS], local time). If omitted runs immediately.")
-    args = p.parse_args()
+    load_dotenv()  # from .env in CWD
 
-    # Parse targets
-    targets = parse_targets_file(args.targets)
-    # Apply defaults
-    for t in targets:
-        if 'username' not in t or not t['username']:
-            if not args.username:
-                print(f"No username for {t['ip']} and no default provided. Use --username or supply csv with username.", file=sys.stderr)
-                sys.exit(2)
-            t['username'] = args.username
-        t['port'] = int(t.get('port') or args.port)
+    ap = argparse.ArgumentParser(description="Run a local parser script on remote machines via SSH")
+    ap.add_argument("--targets", required=True, help="Path to hosts.txt (CSV: name,ip[,username][,port])")
+    ap.add_argument("--since", required=True, help="ISO local datetime cutoff, e.g. 2025-11-05T20:00")
+    ap.add_argument("--parser-file", help="Path to a local bash parser file; if omitted, built-in parser is used")
+    ap.add_argument("--concurrency", type=int, default=int(os.getenv("CONCURRENCY", "8")))
+    ap.add_argument("--timeout", type=int, default=int(os.getenv("TIMEOUT_SECS", "180")))
+    ap.add_argument("--at", help="Optional ISO local datetime to start (e.g. 2025-11-12T03:00)")
+    ap.add_argument("--save-json", help="Optional path to write aggregate JSON results")
+    ap.add_argument("--sudo", action="store_true", help="Run parser under sudo -n bash -s on remote")
+    args = ap.parse_args()
 
-    # Schedule if needed
+    # Defaults from .env
+    defaults = {
+        "username": os.getenv("SSH_USERNAME"),
+        "password": os.getenv("SSH_PASSWORD"),
+        "key": os.getenv("SSH_KEY"),
+        "port": int(os.getenv("SSH_PORT", "22")),
+        "sudo": bool(args.sudo),
+    }
+
+    # Resolve since cutoff
+    cutoff = iso_to_cutoff_yyyymmddhhmm(args.since)
+
+    # Load parser text
+    if args.parser_file:
+        with open(args.parser_file, "r", encoding="utf-8") as f:
+            parser_text = f.read()
+    else:
+        parser_text = BUILTIN_PARSER
+
+    # Load hosts
+    hosts = read_hosts(args.targets)
+
+    # Optional schedule wait
     if args.at:
         try:
-            run_time = datetime.datetime.fromisoformat(args.at)
+            when = dt.datetime.fromisoformat(args.at)
         except Exception:
-            print("Bad --at datetime. Use ISO format like 2025-11-20T03:00", file=sys.stderr)
+            print("Bad --at; use ISO like 2025-11-12T03:00", file=sys.stderr)
             sys.exit(2)
-        now = datetime.datetime.now()
-        delta = (run_time - now).total_seconds()
+        now = dt.datetime.now()
+        delta = (when - now).total_seconds()
         if delta > 0:
-            print(f"Waiting {delta:.1f}s until scheduled time {run_time.isoformat()}...")
+            print(f"Waiting {delta:.0f}s until {when.isoformat()}...")
+            import time
             time.sleep(delta)
         else:
-            print("Scheduled time is in the past, running immediately.")
-
-    print(f"Starting jobs on {len(targets)} targets with concurrency {args.concurrency} ...")
-    results = []
+            print("--at is in the past; running now.")
 
     # Run in parallel
+    results: List[Dict] = []
+    print(f"Running parser on {len(hosts)} hosts with concurrency={args.concurrency} ...\n")
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as ex:
-        futures = []
-        for t in targets:
-            futures.append(
-                ex.submit(ssh_run_command,
-                          t['ip'],
-                          t['username'],
-                          t['port'],
-                          args.key,
-                          args.password,
-                          args.remote_cmd,
-                          args.timeout,
-                          args.download_remote_file,
-                          args.outdir,
-                          args.retries)
-            )
-        for fut in concurrent.futures.as_completed(futures):
+        futs = [
+            ex.submit(run_parser_on_host, h, parser_text, cutoff, args.timeout, defaults)
+            for h in hosts
+        ]
+        for fut in concurrent.futures.as_completed(futs):
             r = fut.result()
             results.append(r)
-            # print summary line
-            if r.get("error"):
-                print(f"[FAIL] {r['ip']}: {r['error']}")
+            tag = f"{r.get('name')} ({r.get('ip')})"
+            if r.get("ok"):
+                print(f"===== {tag} — OK (exit {r.get('exit_status')}) =====")
+                print(r.get("output") or "<no matches>")
             else:
-                print(f"[OK] {r['ip']}: exit={r.get('exit_status')} downloaded={r.get('downloaded_file','-')}")
+                print(f"===== {tag} — FAIL =====")
+                print(r.get("error") or "Unknown error")
+            print()
 
-    # Save aggregated JSON
-    os.makedirs(args.outdir, exist_ok=True)
-    out_json = os.path.join(args.outdir, "aggregate_results.json")
-    with open(out_json, "w", encoding="utf-8") as fj:
-        json.dump(results, fj, indent=2)
+    if args.save_json:
+        os.makedirs(os.path.dirname(args.save_json) or ".", exist_ok=True)
+        with open(args.save_json, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2)
+        print(f"Aggregate JSON saved to {args.save_json}")
 
-    print("Done. Aggregate saved to:", out_json)
-    # Optionally print summary to stdout
-    ok = sum(1 for r in results if not r.get("error"))
+    # Summary
+    ok = sum(1 for r in results if r.get("ok"))
     fail = len(results) - ok
     print(f"Summary: {ok} succeeded, {fail} failed.")
+
 
 if __name__ == "__main__":
     main()

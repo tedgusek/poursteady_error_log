@@ -62,6 +62,16 @@ TIMEOUT_SECS=180
 
 ## 🏷️ hosts.txt Format
 
+The first line sets the SINCE variable, you can update accordingly.
+There are instructions in the file, but here's a quick overview:
+One of these lines should always be commented out depending on what you are trying to do:
+If you want to set a start day/time uncomment the foirast option, and enter the start time
+Alternatively, if you want to start from the beginning of time, uncomment the second line
+
+```
+#SINCE=2025-11-05T20:00
+SINCE=000000000000 
+```
 Each line must be:
 
 ```
@@ -86,31 +96,31 @@ LA_Cafe_01, 10.0.3.44, ubuntu, 2222
 ### Basic
 
 ```bash
-py collect_logs.py --targets hosts.txt --since 2025-11-05T20:00
+py collect_logs.py --targets hosts.txt
 ```
 
 ### Use an external parser file
 
 ```bash
-py collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --parser-file ./collect_errors.sh
+py collect_logs.py --targets hosts.txt --parser-file ./collect_errors.sh
 ```
 
 ### Run with sudo
 
 ```bash
-py collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --sudo
+py collect_logs.py --targets hosts.txt --sudo
 ```
 
 ### Save results to JSON
 
 ```bash
-py collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --save-json ./results/aggregate.json
+py collect_logs.py --targets hosts.txt --save-json ./results/aggregate.json
 ```
 
 ### Schedule for later
 
 ```bash
-py collect_logs.py --targets hosts.txt --since 2025-11-05T20:00 --at 2025-11-12T03:00
+py collect_logs.py --targets hosts.txt --at 2025-11-12T03:00
 ```
 
 ---

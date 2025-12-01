@@ -1,3 +1,4 @@
+import re
 import os
 import time
 import paramiko
@@ -161,11 +162,22 @@ def main():
 
     # STEP 3 → put each machine into test mode
     for name, ip in machines:
+
+    # Only allow names like PS1234
+        if not re.match(r"^PS\d{4}$", name):
+            print(f"⏭ Skipping {name} — not a 4-digit PS machine")
+            continue
+
         print("\n==============================")
-        print(f"🟦 Machine: {name} ({ip})")
+        print(f"🟦 Starting Overnight Test: {name} ({ip})")
         print("==============================\n")
 
-        ssh_send_commands(ip, ps_user, ps_pass)
+        ssh_send_commands(ip, ps_user, ps_pass)    
+        # print("\n==============================")
+        # print(f"🟦 Machine: {name} ({ip})")
+        # print("==============================\n")
+
+        # ssh_send_commands(ip, ps_user, ps_pass)
 
     # STEP 4 → wait
     print(f"\n⏳ Waiting {hours_float} hours ({int(wait_seconds)} seconds)...\n")
@@ -175,6 +187,10 @@ def main():
     print("\n🛑 Stopping overnight test mode on all machines...\n")
 
     for name, ip in machines:
+        if not re.match(r"^PS\d{4}$", name):
+            print(f"⏭ Skipping {name} — not a 4-digit PS machine")
+            continue
+        
         print("\n==============================")
         print(f"🟥 Stopping: {name} ({ip})")
         print("==============================\n")

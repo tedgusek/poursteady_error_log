@@ -1,5 +1,6 @@
 import paramiko
 import os
+import re
 from dotenv import load_dotenv
 
 LOG_COMMAND = r'''
@@ -85,6 +86,11 @@ def main():
     print(f"\n=== Starting Log Parsing (SINCE {since}) ===\n")
 
     for name, ip in devices:
+        # ⏭ Skip machines that are NOT PS#### (exact 4 digits)
+        if not re.match(r"^PS\d{4}$", name):
+            print(f"⏭ Skipping {name} — not a 4-digit PS machine")
+            continue
+        
         print("\n==============================")
         print(f"🟦 Machine: {name} ({ip})")
         print("==============================\n")

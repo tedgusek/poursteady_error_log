@@ -91,120 +91,6 @@ def write_hosts_file(since_value, ps_devices):
 
     print(f"\n✔ hosts.txt updated at: {filepath}\n")
 
-
-# def run_shell_script():
-#     """Runs remote_error_log_parser.sh located in same folder."""
-#     script_path = os.path.join(os.path.dirname(__file__), "remote_error_log_parser.sh")
-
-#     if not os.path.exists(script_path):
-#         print(f"❌ Shell script not found: {script_path}")
-#         return
-
-#     print(f"▶ Running shell script: {script_path}")
-
-#     try:
-#         subprocess.run(["bash", script_path], check=True)
-#         print("✔ Shell script completed.\n")
-#     except subprocess.CalledProcessError as e:
-#         print(f"❌ Script failed with error: {e}")
-#     except Exception as e:
-#         print(f"❌ Unexpected error running script: {e}")
-
-# def run_shell_script_windows_auto():
-#     """
-#     Automatically detects a usable bash interpreter in Windows:
-#     - Git Bash
-#     - WSL
-#     - Cygwin
-#     - MSYS2
-#     Then executes remote_error_log_parser.sh with it.
-#     """
-
-#     script_path = os.path.join(os.path.dirname(__file__), "remote_error_log_parser.sh")
-
-#     if not os.path.exists(script_path):
-#         print(f"❌ Could not find remote_error_log_parser.sh at: {script_path}")
-#         return
-
-#     print("\n=== Detecting bash environments on Windows ===")
-
-#     # 1️⃣ Check Git Bash
-#     git_bash_paths = [
-#         r"C:\Program Files\Git\bin\bash.exe",
-#         r"C:\Program Files (x86)\Git\bin\bash.exe",
-#         r"C:\Program Files\Git\usr\bin\bash.exe",
-#     ]
-#     for path in git_bash_paths:
-#         if os.path.exists(path):
-#             print(f"✔ Using Git Bash: {path}")
-#             try:
-#                 subprocess.run([path, script_path], check=True)
-#                 print("✔ Shell script completed via Git Bash.\n")
-#                 return
-#             except Exception as e:
-#                 print(f"❌ Git Bash failed: {e}")
-
-#     # 2️⃣ Check WSL
-#     try:
-#         wsl_check = subprocess.run(
-#             ["wsl", "bash", "-c", "echo WSL_OK"],
-#             capture_output=True, text=True
-#         )
-#         if "WSL_OK" in wsl_check.stdout:
-#             print("✔ Using WSL bash")
-#             subprocess.run(["wsl", "bash", script_path], check=True)
-#             print("✔ Shell script completed via WSL.\n")
-#             return
-#     except Exception:
-#         pass
-
-#     # 3️⃣ Check Cygwin
-#     cygwin_bash = r"C:\cygwin64\bin\bash.exe"
-#     if os.path.exists(cygwin_bash):
-#         print(f"✔ Using Cygwin bash: {cygwin_bash}")
-#         try:
-#             subprocess.run([cygwin_bash, script_path], check=True)
-#             print("✔ Shell script completed via Cygwin.\n")
-#             return
-#         except Exception as e:
-#             print(f"❌ Cygwin bash failed: {e}")
-
-#     # 4️⃣ Check MSYS2
-#     msys_bash = r"C:\msys64\usr\bin\bash.exe"
-#     if os.path.exists(msys_bash):
-#         print(f"✔ Using MSYS2 bash: {msys_bash}")
-#         try:
-#             subprocess.run([msys_bash, script_path], check=True)
-#             print("✔ Shell script completed via MSYS.\n")
-#             return
-#         except Exception as e:
-#             print(f"❌ MSYS bash failed: {e}")
-
-#     # ❌ Nothing found
-#     print("\n❌ No bash environment found on Windows.")
-#     print("Install Git for Windows here: https://git-scm.com/download/win")
-#     print("or install WSL: wsl --install\n")
-
-
-def run_python_log_parser():
-    """
-    Runs remote_error_log_parser.py using the same Python interpreter.
-    """
-    script_path = os.path.join(os.path.dirname(__file__), "remote_error_log_parser.py")
-
-    if not os.path.exists(script_path):
-        print(f"❌ Could not find remote_error_log_parser.py at: {script_path}")
-        return
-
-    print(f"▶ Running Python log parser: {script_path}")
-
-    try:
-        subprocess.run([sys.executable, script_path], check=True)
-        print("✔ Log parser completed.\n")
-    except Exception as e:
-        print(f"❌ Error running log parser: {e}")
-
-
 def main():
     # Load environment variables
     load_dotenv()
@@ -236,10 +122,6 @@ def main():
 
     # Write hosts.txt
     write_hosts_file(since, ps_devices)
-
-    # Run remote_error_log_parser.sh
-    run_python_log_parser()
-
 
 if __name__ == "__main__":
     main()

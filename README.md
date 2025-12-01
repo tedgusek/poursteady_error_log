@@ -8,6 +8,7 @@ A clean overview of how to fetch, parse, and aggregate error logs from multiple 
 
 This tool:
 
+* Scans Network for PS machines
 * Connects to many Poursteady machines over SSH
 * Streams a local Bash/AWK parser into the remote shell (no files written remotely)
 * Processes logs since a specified timestamp
@@ -21,12 +22,13 @@ This tool:
 
 ```
 ErrorLogRetrieval/
-├── collect_logs.py              # Main controller script (Python)
-├── collect_errors.sh (optional) # Local parser script (can be built-in)
-├── hosts.txt                    # Machine list (NOT committed to git)
-├── .env                         # SSH credentials & defaults (NOT committed)
-├── results/                     # Optional output directory
-└── README.md                    # Documentation
+├── overnight_testing.py             # Main Controller Script (Python)
+├── scan_network_for_ps_machines.py  # Scans Network for PS Machines (Python)
+├── remote_error_log_parser.py       # Parses through the logs on the Machines and returns an Error Count (Python)
+├── hosts.txt                        # Machine list (NOT committed to git and re-written every run)
+├── .env                             # SSH credentials & defaults (NOT committed)
+├── results/                         # Optional output directory
+└── README.md                        # Documentation
 ```
 
 ---
@@ -48,12 +50,23 @@ py -m pip install paramiko python-dotenv
 Create a `.env` file to store SSH defaults:
 
 ```dotenv
-SSH_USERNAME=ubuntu
-SSH_PASSWORD=
-SSH_KEY=C:/Users/YourUser/.ssh/id_ed25519
-SSH_PORT=22
-CONCURRENCY=8
-TIMEOUT_SECS=180
+# SSH auth (prefer keys in production)
+SSH_USERNAME= enter your user name here
+SSH_PASSWORD= enter your password here
+
+# Optional defaults (CLI flags still override these)
+SSH_PORT= enter your port here
+TARGETS_FILE=hosts.txt
+CONCURRENCY=12
+TIMEOUT=120
+RETRIES=2
+# ISO local time; leave blank to run immediately (example below)
+# AT=2025-11-20T03:00
+
+# Orbi auth (prefer keys in production)
+ORBI_IP= enter your IP here
+ORBI_USER= enter your user name here
+ORBI_PASS= enter your password here
 ```
 
 > Do **not** commit `.env` or `hosts.txt` to GitHub.
@@ -63,14 +76,13 @@ TIMEOUT_SECS=180
 ## 🏷️ hosts.txt Format
 
 The first line sets the SINCE variable, you can update accordingly.
-There are instructions in the file, but here's a quick overview.
-One of these lines should always be commented out depending on what you are trying to do, ie:
-If you want to set a start day/time uncomment the first option, and enter the start time.
-Alternatively, if you want to start from the beginning of time, uncomment the second line.
+And the following lines will have the PS Device name and IP address
+ie:
+PS####,###.###.#.###
 
 ```
-#SINCE=2025-11-05T20:00
-SINCE=000000000000 
+SINCE=2025-11-05T20:00
+ 
 ```
 Each line must be:
 
@@ -94,36 +106,17 @@ LA_Cafe_01, 10.0.3.44, ubuntu, 2222
 ## 🚀 Running the Tool
 
 ### Basic
-
+Go to the directory this is saved and run
 ```bash
-py collect_logs.py --targets hosts.txt
+py overnight_testing.py
 ```
-
-### Use an external parser file
-
-```bash
-py collect_logs.py --targets hosts.txt --parser-file ./collect_errors.sh
-```
+You will be prompted to enter how long you want the test to run and from what date/time you want the error parser to start
 
 ### Run with sudo
 
 ```bash
 py collect_logs.py --targets hosts.txt --sudo
 ```
-
-### Save results to JSON
-
-```bash
-py collect_logs.py --targets hosts.txt --save-json ./results/aggregate.json
-```
-
-### Schedule for later
-
-```bash
-py collect_logs.py --targets hosts.txt --at 2025-11-12T03:00
-```
-
----
 
 ## 📤 Example Output
 

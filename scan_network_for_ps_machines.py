@@ -104,7 +104,7 @@ def main():
         return
 
     # Prompt for SINCE time
-    user_input = input("Enter start time (YYYY-MM-DDTHH:MM) or leave blank: ").strip()
+    user_input = input("Enter time you wish to retrive error logs from (YYYY-MM-DDTHH:MM) or leave blank to search all times: ").strip()
     since = user_input if user_input else "000000000000"
 
     # Fetch Orbi device list

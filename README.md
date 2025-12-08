@@ -22,10 +22,15 @@ This tool:
 
 ```
 ErrorLogRetrieval/
-├── overnight_testing.py             # Main Controller Script (Python)
-├── scan_network_for_ps_machines.py  # Scans Network for PS Machines (Python)
-├── remote_error_log_parser.py       # Parses through the logs on the Machines and returns an Error Count (Python)
+├── main.py                          # Main Controller Script (Python)
+├── scanner_orbi                     # Finds and returns machines (Python)
+├── scan_network_for_ps_machines.py  # Uses Scanner to update hosts.txt (Python)
+├── overnight_testing.py             # Sets up and shuts down the Overnight testing sequence on the machines (Python)
+├── remote_error_log_parser.py       # Runner/Wrapper script (Python)
+├── error_log_parser.py              # Error Log parsing engine (Python)
+├── hosts_repo.py                    # Standardizes Read?write process to hosts.txt (Python)
 ├── hosts.txt                        # Machine list (NOT committed to git and re-written every run)
+├── models.py                        # Naming conventions for machines clean and consistent when looking for IPs etc (Python)
 ├── .env                             # SSH credentials & defaults (NOT committed)
 ├── results/                         # Optional output directory
 └── README.md                        # Documentation

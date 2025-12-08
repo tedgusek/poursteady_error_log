@@ -1,207 +1,172 @@
-import re
-import os
+# overnight_testing.py
+from __future__ import annotations
+
 import time
+from dataclasses import dataclass
+from typing import Iterable, List, Dict
+
 import paramiko
-import subprocess
-import sys
-from dotenv import load_dotenv
+
+from models import Machine, is_ps1_name, is_ps2_name, infer_model_from_name
 
 
-def run_scan_script():
-    """Runs scan_network_for_ps_machines.py before starting overnight testing."""
-    scan_script = os.path.join(os.path.dirname(__file__), "scan_network_for_ps_machines.py")
+# PS1 sequences are known
+MODEL_START_SEQUENCES: Dict[str, List[str]] = {
+    "PS1": ["screen -x", "16", "14"],
+    # PS2 placeholder (not used yet)
+    "PS2": [],
+}
 
-    if not os.path.exists(scan_script):
-        print("❌ Could not find scan_network_for_ps_machines.py")
-        return False
-
-    print("\n▶ Running network scan to build hosts.txt ...\n")
-
-    try:
-        subprocess.run([sys.executable, scan_script], check=True)
-        print("\n✔ Network scan complete.\n")
-        return True
-
-    except Exception as e:
-        print(f"❌ Error running scan script: {e}")
-        return False
+MODEL_STOP_SEQUENCES: Dict[str, List[str]] = {
+    "PS1": ["screen -x", "", "q", "\x03"],
+    # PS2 placeholder (not used yet)
+    "PS2": [],
+}
 
 
-def load_hosts():
-    hosts_file = os.path.join(os.path.dirname(__file__), "hosts.txt")
-
-    if not os.path.exists(hosts_file):
-        print("❌ hosts.txt not found after scanning. Something went wrong.")
-        return None, None
-
-    with open(hosts_file) as f:
-        lines = [x.strip() for x in f.readlines() if x.strip()]
-
-    since = lines[0].replace("SINCE=", "")
-    machines = []
-
-    for line in lines[1:]:
-        if "," in line:
-            name, ip = line.split(",", 1)
-            machines.append((name, ip))
-
-    return since, machines
+@dataclass(frozen=True)
+class SSHCredentials:
+    username: str
+    password: str
+    timeout: int = 10
 
 
-def ssh_send_commands(ip, user, passwd):
-    """Use Paramiko to attach to screen and send commands."""
-    print(f"📡 Connecting to {ip}...")
-
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(ip, username=user, password=passwd, timeout=10)
-
-        channel = client.invoke_shell()
-        time.sleep(1)
-
-        # Enter screen session
-        channel.send("screen -x\n")
-        time.sleep(2)
-
-        # Run commands inside screen
-        channel.send("16\n")
-        time.sleep(1)
-
-        channel.send("14\n")
-        time.sleep(1)
-
-        print(f"✔ Overnight test mode enabled on {ip}")
-
-        channel.close()
-        client.close()
-        return True
-
-    except Exception as e:
-        print(f"❌ Failed on {ip}: {e}")
-        return False
-
-def ssh_stop_testing(ip, user, passwd):
-    """Exit the overnight testing loop by sending Enter, 'q', Enter."""
-    print(f"🛑 Connecting to {ip} to STOP testing...")
-
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(ip, username=user, password=passwd, timeout=10)
-
-        channel = client.invoke_shell()
-        time.sleep(1)
-
-        channel.send("screen -x\n")  # Attach
-        time.sleep(2)
-
-        channel.send("\n")           # Enter  
-        time.sleep(0.5)
-        channel.send("q\n")          # q + Enter
-        time.sleep(1)
-
-        channel.send("\x03")        # Send CTRL+C
-        time.sleep(0.7)
-
-        print(f"✔ Overnight testing stopped on {ip}")
-
-        channel.close()
-        client.close()
-        return True
-
-    except Exception as e:
-        print(f"❌ Failed stopping test on {ip}: {e}")
-        return False
+def _open_shell(ip: str, creds: SSHCredentials):
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(ip, username=creds.username, password=creds.password, timeout=creds.timeout)
+    channel = client.invoke_shell()
+    time.sleep(1)
+    return client, channel
 
 
-def run_log_parser():
-    """Runs remote_error_log_parser.py"""
-    log_script = os.path.join(os.path.dirname(__file__), "remote_error_log_parser.py")
+def _send_sequence(channel, sequence: List[str], per_step_delay=1.0, attach_delay=2.0):
+    for i, cmd in enumerate(sequence):
+        if cmd == "\x03":
+            channel.send(cmd)
+        else:
+            channel.send(cmd + "\n")
 
-    if not os.path.exists(log_script):
-        print("❌ Could not find remote_error_log_parser.py")
-        return
-
-    print("\n▶ Running error log parser...\n")
-    subprocess.run([sys.executable, log_script])
-
-
-def main():
-    load_dotenv()
-
-    ps_user = os.getenv("SSH_USERNAME")
-    ps_pass = os.getenv("SSH_PASSWORD")
-
-    if not ps_user or not ps_pass:
-        print("❌ Missing PS_USER or PS_PASS in .env")
-        return
-
-    # STEP 1 → run scanner to rebuild hosts.txt
-    if not run_scan_script():
-        return
-
-    # STEP 2 → load hosts
-    since, machines = load_hosts()
-
-    if machines is None:
-        return
-
-    print("\n===== OVERNIGHT TESTING SETUP =====\n")
-
-    hours = input("How many hours should the test run before collecting logs? ").strip()
-
-    try:
-        hours_float = float(hours)
-        wait_seconds = hours_float * 3600
-    except:
-        print("❌ Invalid number of hours.")
-        return
-
-    print("\n🛠 Sending machines into overnight testing mode...\n")
-
-    # STEP 3 → put each machine into test mode
-    for name, ip in machines:
-
-    # Only allow names like PS1234
-        if not re.match(r"^PS\d{4}$", name):
-            print(f"⏭ Skipping {name} — not a 4-digit PS machine")
-            continue
-
-        print("\n==============================")
-        print(f"🟦 Starting Overnight Test: {name} ({ip})")
-        print("==============================\n")
-
-        ssh_send_commands(ip, ps_user, ps_pass)    
-        # print("\n==============================")
-        # print(f"🟦 Machine: {name} ({ip})")
-        # print("==============================\n")
-
-        # ssh_send_commands(ip, ps_user, ps_pass)
-
-    # STEP 4 → wait
-    print(f"\n⏳ Waiting {hours_float} hours ({int(wait_seconds)} seconds)...\n")
-    time.sleep(wait_seconds)
-
-    # STEP 5 → Quit the Overnight Testing
-    print("\n🛑 Stopping overnight test mode on all machines...\n")
-
-    for name, ip in machines:
-        if not re.match(r"^PS\d{4}$", name):
-            print(f"⏭ Skipping {name} — not a 4-digit PS machine")
-            continue
-        
-        print("\n==============================")
-        print(f"🟥 Stopping: {name} ({ip})")
-        print("==============================\n")
-
-        ssh_stop_testing(ip, ps_user, ps_pass)
-
-    
-    # STEP 6 → run log parser
-    print("\n⏰ Time's up — collecting logs!\n")
-    run_log_parser()
+        if i == 0 and "screen -x" in cmd:
+            time.sleep(attach_delay)
+        else:
+            time.sleep(per_step_delay)
 
 
-if __name__ == "__main__":
-    main()
+class OvernightTester:
+    def __init__(self, creds: SSHCredentials):
+        self.creds = creds
+
+    def start_one(self, machine: Machine) -> bool:
+        sequence = MODEL_START_SEQUENCES["PS1"]
+
+        client = None
+        channel = None
+        try:
+            print(f"📡 Connecting to {machine.ip} to START overnight testing (PS1)...")
+            client, channel = _open_shell(machine.ip, self.creds)
+            _send_sequence(channel, sequence)
+            print(f"✔ Overnight test mode enabled on {machine.ip}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed starting test on {machine.ip}: {e}")
+            return False
+        finally:
+            try:
+                if channel:
+                    channel.close()
+            except:
+                pass
+            try:
+                if client:
+                    client.close()
+            except:
+                pass
+
+    def stop_one(self, machine: Machine) -> bool:
+        sequence = MODEL_STOP_SEQUENCES["PS1"]
+
+        client = None
+        channel = None
+        try:
+            print(f"🛑 Connecting to {machine.ip} to STOP overnight testing (PS1)...")
+            client, channel = _open_shell(machine.ip, self.creds)
+            _send_sequence(channel, sequence, per_step_delay=0.7)
+            print(f"✔ Overnight testing stopped on {machine.ip}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed stopping test on {machine.ip}: {e}")
+            return False
+        finally:
+            try:
+                if channel:
+                    channel.close()
+            except:
+                pass
+            try:
+                if client:
+                    client.close()
+            except:
+                pass
+
+    def start_bulk(self, machines: Iterable[Machine], model_choice: str) -> None:
+        choice = model_choice.upper().strip()
+
+        for m in machines:
+            # Strict selection filter
+            if choice == "PS1" and not is_ps1_name(m.name):
+                continue
+            if choice == "PS2" and not is_ps2_name(m.name):
+                continue
+            if choice == "BOTH" and not (is_ps1_name(m.name) or is_ps2_name(m.name)):
+                continue
+
+            # PS2 not supported remotely yet
+            if is_ps2_name(m.name):
+                print("\n==============================")
+                print(f"🟨 PS2 Machine: {m.name} ({m.ip})")
+                print("⚠ PS2 remote overnight start is not implemented yet.")
+                print("   Please start PS2 overnight testing manually.")
+                print("==============================\n")
+                continue
+
+            print("\n==============================")
+            print(f"🟦 Starting Overnight Test (PS1): {m.name} ({m.ip})")
+            print("==============================\n")
+            self.start_one(m)
+
+    def stop_bulk(self, machines: Iterable[Machine], model_choice: str) -> None:
+        choice = model_choice.upper().strip()
+
+        for m in machines:
+            # Strict selection filter
+            if choice == "PS1" and not is_ps1_name(m.name):
+                continue
+            if choice == "PS2" and not is_ps2_name(m.name):
+                continue
+            if choice == "BOTH" and not (is_ps1_name(m.name) or is_ps2_name(m.name)):
+                continue
+
+            # PS2 not supported remotely yet
+            if is_ps2_name(m.name):
+                print("\n==============================")
+                print(f"🟨 PS2 Machine: {m.name} ({m.ip})")
+                print("⚠ PS2 remote overnight stop is not implemented yet.")
+                print("   Please stop PS2 overnight testing manually if needed.")
+                print("==============================\n")
+                continue
+
+            print("\n==============================")
+            print(f"🟥 Stopping Overnight Test (PS1): {m.name} ({m.ip})")
+            print("==============================\n")
+            self.stop_one(m)
+
+
+# Backward compatible helpers
+def start_tests_bulk(machines, creds, model_choice):
+    tester = OvernightTester(creds)
+    tester.start_bulk([Machine(n, ip) for n, ip in machines], model_choice)
+
+def stop_tests_bulk(machines, creds, model_choice):
+    tester = OvernightTester(creds)
+    tester.stop_bulk([Machine(n, ip) for n, ip in machines], model_choice)

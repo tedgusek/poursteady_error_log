@@ -13,7 +13,7 @@ class Machine:
 
 
 # Strict naming rules
-PS1_RE = re.compile(r"^PS\d{4}$")     # PS####
+PS1_RE = re.compile(r"^PS\d{1,4}$")     # PS####
 PS2_RE = re.compile(r"^PS\d{7}$")     # PS#######
 
 

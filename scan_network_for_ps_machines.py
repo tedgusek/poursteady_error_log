@@ -8,6 +8,10 @@ from hosts_repo import HostsRepo
 SCRIPT_DIR = os.path.dirname(__file__)
 HOSTS_FILE = os.path.join(SCRIPT_DIR, "hosts.txt")
 
+BLACKOUT = [
+    "PS1000", "PS000" , "PS0000"
+]
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -25,7 +29,7 @@ def main():
 
     try:
         scanner = OrbiScanner.from_env()
-        machines = scanner.scan_ps_machines()
+        machines = scanner.scan_ps_machines(blackout=BLACKOUT)
     except Exception as e:
         print(f"❌ Scan failed: {e}")
         return

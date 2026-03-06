@@ -99,10 +99,12 @@ class OrbiScanner:
         except:
             return None
 
-    def filter_ps_devices(self, devices) -> List[Machine]:
+    def filter_ps_devices(self, devices, blackout: Optional[List[str]] = None) -> List[Machine]:
         """
         Only accept strict PS#### and PS####### names.
+        Machines whose canonical name appears in the blackout list are skipped.
         """
+        blackout_set = {normalize_name(b) for b in blackout} if blackout else set()
         results: List[Machine] = []
 
         for d in devices:
@@ -114,12 +116,15 @@ class OrbiScanner:
 
             canonical = normalize_name(name)
 
+            if canonical in blackout_set:
+                continue
+
             if is_ps_any(canonical):
                 results.append(Machine(canonical, ip))
 
         return results
 
-    def scan_ps_machines(self) -> List[Machine]:
+    def scan_ps_machines(self, blackout: Optional[List[str]] = None) -> List[Machine]:
         raw, _url = self.fetch_orbi_raw()
         if not raw:
             raise RuntimeError("Could not locate device list endpoint.")
@@ -128,4 +133,4 @@ class OrbiScanner:
         if not devices:
             raise RuntimeError("Could not parse device list.")
 
-        return self.filter_ps_devices(devices)
+        return self.filter_ps_devices(devices, blackout=blackout)

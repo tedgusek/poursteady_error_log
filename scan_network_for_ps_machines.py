@@ -9,7 +9,7 @@ SCRIPT_DIR = os.path.dirname(__file__)
 HOSTS_FILE = os.path.join(SCRIPT_DIR, "hosts.txt")
 
 BLACKOUT = [
-    "PS1000", "PS000" , "PS0000"
+    "PS1000", "PS000" , "PS0000", "PS1305"
 ]
 
 

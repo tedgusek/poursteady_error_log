@@ -8,6 +8,7 @@ from hosts_repo import HostsRepo
 SCRIPT_DIR = os.path.dirname(__file__)
 HOSTS_FILE = os.path.join(SCRIPT_DIR, "hosts.txt")
 
+#PS1000 - Hal, PS0000 & PS000- Engineering bots, PS1305 - Kitchen Bot
 BLACKOUT = [
     "PS1000", "PS000" , "PS0000", "PS1305"
 ]
